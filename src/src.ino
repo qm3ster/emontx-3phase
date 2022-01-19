@@ -71,15 +71,15 @@ const int version = 14;                          // The firmware version 1.4
 #define SERIALPRINT                              // include 'human-friendly' print statement for commissioning - comment this line to exclude.
 
 // Pulse counting settings
-#define USEPULSECOUNT                            // include the ability to count pulses. Comment this line if pulse counting is not required.
+// #define USEPULSECOUNT                            // include the ability to count pulses. Comment this line if pulse counting is not required.
 #define PULSEINT 1                               // Interrupt no. for pulse counting: EmonTx V2 = 0, EmonTx V3 = 1, EmonTx Shield - see Wiki
 #define PULSEPIN 3                               // Interrupt input pin: EmonTx V2 = 2, EmonTx V3 = 3, EmonTx Shield - see Wiki
 #define PULSEMINPERIOD 110                       // minimum period between pulses (ms) - default pulse output meters = 100ms
                                                  //   Set to 0 for electronic sensor with solid-state output.
                                                  
 // RFM settings                                  // THIS SKETCH WILL NOT WORK WITH THE RFM12B radio.
-//#define EMONESP                                // Uncomment to use the sketch with EmonESP and comment out the line below #define RFM69CW
-#define RFM69CW                                  // The type of Radio Module, or none.
+#define EMONESP                                  // Uncomment to use the sketch with EmonESP and comment out the line below #define RFM69CW
+// #define RFM69CW                               // The type of Radio Module, or none.
                                                  // Can be RFM69CW 
                                                  //   or SERIALOUT if a wired serial connection is used 
                                                  //   or EMONESP if an ESP WiFi module is used
