@@ -11,22 +11,15 @@
                       85  deg   although in range, might indicate a wiring fault.
 
     Three-phase energy monitor
-    V 1.0   10/12/17 The original extensively modified with diverter code removed
-                     and extended for 3-phase operation. 
-    V 1.1   20/02/18 Sleep (sleep_mode()) removed from rfm_sleep() in rfm.ino
-    V 1.2   12/03/18 Temperature fault codes were
-                      300 deg = Faulty sensor, sensor broken or disconnected.
-                      301 deg = Sensor has never been detected since power-up/reset. 
-                      302 deg = Sensor returned an out-of-range value. 
-    V 1.3   25/09/18 Declaration of showString() added - omission thereof caused 
-                      compiler error in Arduino IDE V1.8.7
-    V 1.4   22/10/18 Added 3-wire options & switch for 4-wire / 3-wire operation, 
-                      free choice of phase for all four c.t's. 
-    V 1.5            Documentation change only
-    V 1.6   24/2/19  Unwanted space in emonESP output removed. No change to documentation.
-                      
+
     
-                     
+    V 2.0.0  11/07/21  Derived from the "Classic JeeLib" version. Uses either Jeelib "Classic" or "RFM69 Native" format and OEM "rfm69nTxLib.h" library instead of rfm.ino file.
+    V 2.0.1  31/07/21  Typo in print statement for SERIALOUT output, Serial data no longer restricted to 9600 baud, default now 115200
+*/
+
+#define VERSION "emonTx_3Phase_PLL - Firmware version 2.0.0 "                      
+    
+/*
     History (single Phase energy diverter):
     2/12/12  first published version
     3/12/12  diverted power calculation & transmission added
@@ -34,6 +27,24 @@
     10/12/12 high & low energy thresholds added to reduce flicker
     12/10/13 PB added 3rd CT channel to determine diverted power
     09/09/14 EmonTx v3 option added by PB ( http://openenergymonitor.org/emon/node/5714 )
+    
+    Three-phase energy monitor using "classic JeeLib"
+    V 1.0    10/12/17 The original extensively modified with diverter code removed
+                     and extended for 3-phase operation. 
+    V 1.1    20/02/18 Sleep (sleep_mode()) removed from rfm_sleep() in rfm.ino
+    V 1.2    12/03/18 Temperature fault codes were
+                      300 deg = Faulty sensor, sensor broken or disconnected.
+                      301 deg = Sensor has never been detected since power-up/reset. 
+                      302 deg = Sensor returned an out-of-range value. 
+    V 1.3    25/09/18 Declaration of showString() added - omission thereof caused 
+                      compiler error in Arduino IDE V1.8.7
+    V 1.4    22/10/18 Added 3-wire options & switch for 4-wire / 3-wire operation, 
+                      free choice of phase for all four c.t's. 
+    V 1.5            Documentation change only
+    V 1.6    24/2/19  Unwanted space in emonESP output removed. No change to documentation.
+    V 1.7            Versions 1.5 & 1.6 showed "V1.4" in serial print. Order of lines 457 & 458 was reversed. Added preprocessor substitution VERSION to replace a variable. 
+
+   
 
 
     emonhub.conf node decoder settings for this sketch:
@@ -57,8 +68,10 @@
 
     For serial input, emonHub requires "datacode = 0" in place of "datacodes = ...." as above.
     
+    This sketch requires the OEM RFM69CW transmit-only library "rfm69nTxLib.h" and uses the "JeeLib RFM69 Native" message format.
 */
-const int version = 14;                          // The firmware version 1.4
+
+#define RF_NATIVE                                // Sets the RF data format: either RF_CLASSIC or RF_NATIVE. Use "classic" for emonPi, "native" for emonPiCM
 
 #define EMONTX_V34                               // Sets the I/O pin allocation. 
                                                  // use EMONTX_V2 or EMONTX_V32 or EMONTX_V34 or EMONTX_SHIELD as appropriate
@@ -67,66 +80,81 @@ const int version = 14;                          // The firmware version 1.4
 //--------------------------------------------------------------------------------------------------
 // #define DEBUGGING                             // enable this line to include debugging print statements
                                                  //  This is turned off when SERIALOUT or EMONESP (see below) is defined.
-
+                                                 
+#define SERIAL_BAUD 115200                       // Speed for all serial output via FTDI port
 #define SERIALPRINT                              // include 'human-friendly' print statement for commissioning - comment this line to exclude.
 
 // Pulse counting settings
-// #define USEPULSECOUNT                            // include the ability to count pulses. Comment this line if pulse counting is not required.
+// #define USEPULSECOUNT                            // include the ability to count pulses. Comment this line if pulse counting is not required. When enabled, pulse counting can still be turned on and off in the on-line settings.
 #define PULSEINT 1                               // Interrupt no. for pulse counting: EmonTx V2 = 0, EmonTx V3 = 1, EmonTx Shield - see Wiki
 #define PULSEPIN 3                               // Interrupt input pin: EmonTx V2 = 2, EmonTx V3 = 3, EmonTx Shield - see Wiki
 #define PULSEMINPERIOD 110                       // minimum period between pulses (ms) - default pulse output meters = 100ms
                                                  //   Set to 0 for electronic sensor with solid-state output.
                                                  
-// RFM settings                                  // THIS SKETCH WILL NOT WORK WITH THE RFM12B radio.
-#define EMONESP                                  // Uncomment to use the sketch with EmonESP and comment out the line below #define RFM69CW
-// #define RFM69CW                               // The type of Radio Module, or none.
+// Output settings                               // THIS SKETCH WILL NOT WORK WITH THE RFM12B radio.
+#define EMONESP                                  // The type of output: Radio Module, serial or none.
                                                  // Can be RFM69CW 
-                                                 //   or SERIALOUT if a wired serial connection is used 
-                                                 //   or EMONESP if an ESP WiFi module is used
-                                                 //     (see http://openenergymonitor.org/emonnode/3872) 
+                                                 //   or SERIALOUT if a wired serial connection is used (space-separated values for the
+                                                 //     "direct serial" EmonHubSerialInterfacer
+                                                 //     (see https://github.com/openenergymonitor/emonhub/tree/emon-pi/conf/
+                                                 //        interfacer_examples/directserial) 
+                                                 //   or EMONESP if an ESP WiFi module is used 
+                                                 //     (see https://github.com/openenergymonitor/emonTxFirmware/blob/master/emonTxV3/
+                                                 //       noRF/emonTxV3_DirectSerial/emonTxV3_DirectSerial.ino)
+                                                 //       (key:value pairs for the EmonHubTx3eInterfacer)
                                                  //   or don't define anything if neither radio nor serial connection is required - in which case 
                                                  //      the IDE serial monitor output will be for information and debugging only.
                                                  // The sketch will hang if the wrong radio module is specified, or if one is specified and not fitted.
-                                                 // For all serial output, the maximum is 9600 baud. The emonESP module must be set to suit.
-                                                 
-#undef RF12_433MHZ
-#undef RF12_868MHZ
-#undef RF12_915MHZ                               // Should not be present, but can cause problems if they are.
+#ifdef RF_NATIVE
+  #include <rfm69nTxLib.h>                     // OEM RFM69CW transmit-only library using "JeeLib RFM69 Native" message format
+#else
+  #include <rfmTxLib.h>                        // OEM RFM69CW transmit-only library using "JeeLib RFM69 Native" message format
+#endif
 
-#define RF12_433MHZ                              // Frequency of RFM module can be 
-                                                 //    RF12_433MHZ, RF12_868MHZ or RF12_915MHZ. 
-                                                 //  You should use the one matching the module you have.
-                                                 //  (Note: this is different from the normal OEM definition.)
+  
+const int busyThreshold = -97;                   // Signal level below which the radio channel is clear to transmit
+const byte busyTimeout = 15;                     // Time in ms to wait for the channel to become clear, before transmitting anyway
 
-#define RFPWR 0x99                               // Transmitter power: 0x80 = -18 dBm (min) - 0x9F = +13 dBm (max)
-                                                 //    0x99 - RFM12B equivalent
-                                                 //    A 5 V supply is required for the emonTx V3.4 versions prior to V3.4.4 if power is set 
-                                                 //    significantly above the minimum.
+typedef uint8_t DeviceAddress[8];
 
-int nodeID = 11;                                 //  node ID for this emonTx. Or nodeID-1 if DIP switch 1 is ON.
-int networkGroup = 210;                          //  wireless network group
-                                                 //  - needs to be same as emonBase and emonGLCD. OEM default is 210
 
+//-------------------- emonTx Settings - Stored in EEPROM and shared with config.ino ---------------
+//-------------------- Constants which must be set individually for each system --------------------
+#include <emonEProm.h>                           // OEM EEPROM library
+
+struct {
+  byte RF_freq = RFM_433MHZ;                     // Frequency of radio module can be RFM_433MHZ, RFM_868MHZ or RFM_915MHZ. 
+  byte networkGroup = 210;                       // wireless network group - needs to be same as emonBase and emonGLCD. OEM default is 210
+  byte rf_on = 1;                                // RF - 0 = no RF, 1 = RF on.
+  byte nodeID = 11;                              // node ID for this emonTx. Or nodeID-1 if DIP switch 1 is ON. 
+  byte  rfPower = 25;                            // 7 = -10.5 dBm, 25 = +7 dBm for RFM12B; 0 = -18 dBm, 31 = +13 dBm for RFM69CW. Default = 25 (+7 dBm)
+  double vCal  = 268.97;                         // (240V x 13) / 11.6V = 268.97 Calibration for UK AC-AC adapter 77DB-06-09, 
+                                                 //   for the EU adapter use 260.00, for the USA adapter use 130.00
+  double i1Cal = 90.91;                          // (100 A / 50 mA / 22 Ohm burden) = 90.91 or 60.6 for emonTx Shield
+  double i1Lead = 2.00;                          // 2° phase lead
+  double i2Cal = 90.91;
+  double i2Lead = 2.00;
+  double i3Cal = 90.91;
+  double i3Lead = 2.00;
+  double i4Cal = 16.67;                          // (100 A / 50 mA / 120 Ohm burden) = 16.67
+  double i4Lead = 0.20;                          // 0.2° phase lead
+  float period = 9.85;                           // datalogging period - should be fractionally less than the PHPFINA database period in emonCMS
+ 
+  bool  pulse_enable = true;                     // pulse counting
+  int   pulse_period = 110;                      // pulse min period - 0 = no de-bounce
+  bool  temp_enable = true;                      // enable temperature measurement
+  DeviceAddress allAddresses[6];                 // sensor address data
+  bool  showCurrents = false;                    // Print to serial voltage, current & p.f. values  
+
+} EEProm;
+  
+uint16_t eepromSig = 0x0016;                     // oemEProm signature - see oemEProm Library documentation for details.
+ 
+#define VCAL_EU 260.0                            // can use DIP switch 2 to set this as the starting value.                     
 
 
 //--------------------------------------------------------------------------------------------------
 
-//--------------------------------------------------------------------------------------------------
-// constants which must be set individually for each system
-
-
-double vCal = 268.97;     // calculated value is 240:11.6 for UK transformer x 13:1 for resistor divider = 268.97
-                          //   for the EU adapter use 260.00, for the USA adapter use 130.00
-#define VCAL_EU 260.0     // can use DIP switch 2 to set this as the starting value.                     
-double i1Cal = 90.91;     // calculated value is 100A:0.05A for transformer / 22 Ohms for resistor = 90.91, or 60.6 for emonTx Shield
-double i2Cal = 90.91;     // calculated value is 100A:0.05A for transformer / 22 Ohms for resistor = 90.91, or 60.6 for emonTx Shield
-double i3Cal = 90.91;     // calculated value is 100A:0.05A for transformer / 22 Ohms for resistor = 90.91, or 60.6 for emonTx Shield
-double i4Cal = 16.67;     // calculated value is 100A:0.05A for transformer / 120 Ohms for resistor
-
-double i1Lead = 2.00;     // degrees by which the v.t. phase error leads the c.t.1 phase error
-double i2Lead = 2.00;     // degrees by which the v.t. phase error leads the c.t.2 phase error
-double i3Lead = 2.00;     // degrees by which the v.t. phase error leads the c.t.3 phase error
-double i4Lead = 0.20;     // degrees by which the v.t. phase error leads the c.t.4 phase error
 
 #define WIRES 4-WIRE      // either 4-WIRE (default, measure voltage L1 - N) or 3-WIRE (no neutral, measure voltage L1 - L2)
 
@@ -137,8 +165,8 @@ double i4Lead = 0.20;     // degrees by which the v.t. phase error leads the c.t
                           //   (See also NUMSAMPLES below)
 #define LEDISLOCK         // comment this out for LED pulsed during transmission
                           //  otherwise LED shows loop is locked, and occults to show transmission, but that is not easily visible
-//--------------------------------------------------------------------------------------------------
 
+                          
 //--------------------------------------------------------------------------------------------------
 // other system constants
 #define SUPPLY_VOLTS 3.3  // used here because it's more accurate than the internal band-gap reference. Use 5.0 for Arduino / emonTx Shield
@@ -149,7 +177,6 @@ double i4Lead = 0.20;     // degrees by which the v.t. phase error leads the c.t
                           //                                          50 Hz, 4 c.t: 36         60 Hz, 4 c.t: 33
 #define ADC_BITS 10       // ADC Resolution
 #define ADC_RATE 64       // Time between successive ADC conversions in microseconds
-#define LOOPTIME 5000     // time of outer loop in milliseconds, also time between data transmissions
 
 #define PLLTIMERRANGE 100 // PLL timer range limit ~ +/-0.5Hz
 #define PLLLOCKRANGE 40   // allowable ADC range to enter locked state
@@ -291,17 +318,13 @@ const byte PulseMinPeriod = PULSEMINPERIOD;      // minimum period between pulse
 #endif
 //--------------------------------------------------------------------------------------------------
 
-#include <Wire.h>
-#include <SPI.h>
-#include <util/crc16.h>
 #include <OneWire.h>
 
-typedef struct { int power1, power2, power3, power4, Vrms, temp[MAXONEWIRE] = {UNUSED_TEMPERATURE,UNUSED_TEMPERATURE,
+// create a data packet for the RFM
+struct { int power1, power2, power3, power4, Vrms, temp[MAXONEWIRE] = {UNUSED_TEMPERATURE,UNUSED_TEMPERATURE,
                   UNUSED_TEMPERATURE,UNUSED_TEMPERATURE,UNUSED_TEMPERATURE,UNUSED_TEMPERATURE};
-                  unsigned long pulseCount; } PayloadTx; 
-PayloadTx emontx;
-
-
+                  unsigned long pulseCount; } emontx;
+ 
 // Intermediate constants
 double v_ratio, i1_ratio, i2_ratio, i3_ratio, i4_ratio;
 double i1phaseshift, i2phaseshift, i3phaseshift, i4phaseshift;
@@ -344,6 +367,9 @@ bool rfmXmit = false;
 OneWire oneWire(W1PIN);
 bool hasTemperatureSensor = false;
 
+bool calibration_enable = false;                           // Enable on-line calibration when running. 
+                                                           //  For safety, thus MUST default to false. (Required due to faulty ESP8266 software.)
+
 static void showString (PGM_P s);
 
 void setup()
@@ -358,11 +384,11 @@ void setup()
   //READ DIP SWITCH 1 POSITION 
   pinMode(DIP_SWITCH1, INPUT_PULLUP);
   if (digitalRead(DIP_SWITCH1)==LOW) 
-    nodeID++;  //If DIP switch 1 is switched on then add 1 to the nodeID
+    EEProm.nodeID++;  //If DIP switch 1 is switched on then add 1 to the nodeID
   //READ DIP SWITCH 2 POSITION 
   pinMode(DIP_SWITCH2, INPUT_PULLUP);
   if (digitalRead(DIP_SWITCH2)==LOW) 
-    vCal = VCAL_EU;  //If DIP switch 2 is switched on then start with calibration for EU a.c. adapter
+    EEProm.vCal = VCAL_EU;  //If DIP switch 2 is switched on then start with calibration for EU a.c. adapter
   #endif
   #ifdef SYNCPIN
   pinMode(SYNCPIN, OUTPUT);
@@ -387,9 +413,10 @@ void setup()
   SPI.setDataMode(0);
   SPI.setClockDivider(SPI_CLOCK_DIV8);
   // initialise RFM69
-  delay(200); // wait for RFM12 POR
   #ifdef RFM69CW
-    rfm_init();
+    delay(200); // wait for RFM69CW POR
+    if (EEProm.rf_on)
+      rfm_init();                           // initialize RFM
   #endif
   
   #ifdef USEPULSECOUNT
@@ -397,9 +424,8 @@ void setup()
   attachInterrupt(PULSEINT, onPulse, RISING);    // Attach pulse counting interrupt pulse counting
   #endif
   emontx.pulseCount=0;                           // Make sure pulse count starts at zero
-    
-  Serial.begin(9600);                            // Do NOT set greater than 9600
-digitalWrite(LEDPIN, LOW);   
+  Serial.begin(SERIAL_BAUD);                            
+  digitalWrite(LEDPIN, LOW);   
   Serial.println(F("OpenEnergyMonitor.org"));
   #if !defined SERIALOUT && !defined EMONESP
    #ifdef EMONTX_V2
@@ -414,8 +440,7 @@ digitalWrite(LEDPIN, LOW);
    #ifdef EMONTX_SHIELD    
      Serial.print(F("emonTx Shield"));
    #endif    
-   Serial.print(F(" CT1234 Voltage 3 Phase PLL example - Firmware version "));
-   Serial.println(version/10.0);
+   Serial.println(F(VERSION));
 
 
    #ifdef RFM69CW
@@ -432,31 +457,23 @@ digitalWrite(LEDPIN, LOW);
    load_config(false);   
   #endif  // #if !defined SERIALOUT && !defined EMONESP 
   
+
   #if !defined SERIALOUT && !defined EMONESP
    Serial.print(F("Network: ")); 
-   Serial.println(networkGroup);
+   Serial.println(EEProm.networkGroup);
   
    Serial.print(F("Node: ")); 
-   Serial.print(nodeID); 
+   Serial.print(EEProm.nodeID); 
 
    Serial.print(F(" Freq: ")); 
-   #ifdef RF12_868MHZ
-     Serial.println(F("868MHz"));
-   #elif defined RF12_915MHZ    
-     Serial.println(F("915MHz"))
-   #else // default to 433 MHz
-     Serial.println(F("433MHz"));
-   #endif
-
-   readInput();                                   // Read new RF config and send to EEPROM (if desired)
-
+   if (EEProm.RF_freq == RFM_433MHZ) Serial.println(F("433MHz"));
+   if (EEProm.RF_freq == RFM_868MHZ) Serial.println(F("868MHz"));
+   if (EEProm.RF_freq == RFM_915MHZ) Serial.println(F("915MHz"));
   #endif  // #if !defined SERIALOUT && !defined EMONESP 
   
-  calculateTiming();
   calculateConstants();
+  calculateTiming();
 
-  nextTransmitTime=millis();
- 
   if (isTemperatureSensor())
   {      
     hasTemperatureSensor = true;
@@ -469,13 +486,10 @@ digitalWrite(LEDPIN, LOW);
     Serial.print(F("x2 = "));Serial.print(x2);Serial.print(F("  y2 = "));Serial.println(y2);
     Serial.print(F("x3 = "));Serial.print(x3);Serial.print(F("  y3 = "));Serial.println(y3);
     Serial.print(F("x4 = "));Serial.print(x4);Serial.print(F("  y4 = "));Serial.println(y4);
-      
   #endif
   
-  
-  
   // change ADC prescaler to /64 = 250kHz clock
-  // slightly out of spec of 200kHz but should be OK
+  // slightly out of spec of 200kEEProm.nodeIDHz but should be OK
   ADCSRA &= 0xf8;  // remove bits set by Arduino library
   ADCSRA |= 0x06; 
 
@@ -490,11 +504,14 @@ digitalWrite(LEDPIN, LOW);
   bitSet(TIMSK1,OCIE1A); // enable timer 1 compare interrupt
   bitSet(ADCSRA,ADIE); // enable ADC interrupt
   interrupts();
+
+  nextTransmitTime=millis() + EEProm.period*1000 + (EEProm.nodeID * 20);
 }
 
 void loop()
 {
-  getCalibration();
+  getSettings();
+
   
   if(newsumCycle && !firstCycle)
     addsumCycle(); // a new mains sumCycle has been sampled
@@ -509,7 +526,7 @@ void loop()
     #endif
     calculateVIPF();
 
-    if (hasTemperatureSensor)
+    if (hasTemperatureSensor && EEProm.temp_enable)
         emontx.temp[0]=readTemperature();
     
     if (pulses)                                      // if the ISR has counted some pulses, update the total count
@@ -521,8 +538,9 @@ void loop()
     }
 
     sendResults();
-    convertTemperature(); // start next conversion
-    nextTransmitTime+=LOOPTIME;
+    if (EEProm.temp_enable)
+      convertTemperature(); // start next conversion
+    nextTransmitTime+=EEProm.period*1000;
     #ifndef LEDISLOCK
       digitalWrite(LEDPIN,LOW);
     #else
@@ -868,21 +886,21 @@ void calculateConstants(void)
 {
   // Intermediate calculations
 
-  v_ratio = vCal  * SUPPLY_VOLTS / 1024; 
-  i1_ratio = i1Cal  * SUPPLY_VOLTS / 1024;
-  i2_ratio = i2Cal  * SUPPLY_VOLTS / 1024;
-  i3_ratio = i3Cal  * SUPPLY_VOLTS / 1024; 
-  i4_ratio = i4Cal  * SUPPLY_VOLTS / 1024; 
+  v_ratio = EEProm.vCal  * SUPPLY_VOLTS / 1024; 
+  i1_ratio = EEProm.i1Cal  * SUPPLY_VOLTS / 1024;
+  i2_ratio = EEProm.i2Cal  * SUPPLY_VOLTS / 1024;
+  i3_ratio = EEProm.i3Cal  * SUPPLY_VOLTS / 1024; 
+  i4_ratio = EEProm.i4Cal  * SUPPLY_VOLTS / 1024; 
 
   #ifdef CT4Phase
-    i1phaseshift = (4 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i1Lead); // in degrees
-    i2phaseshift = (3 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i2Lead);
-    i3phaseshift = (2 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i3Lead);
-    i4phaseshift = (1 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i4Lead);
+    i1phaseshift = (4 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i1Lead); // in degrees
+    i2phaseshift = (3 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i2Lead);
+    i3phaseshift = (2 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i3Lead);
+    i4phaseshift = (1 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i4Lead);
   #else
-    i1phaseshift = (3 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i1Lead); // in degrees
-    i2phaseshift = (2 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i2Lead);
-    i3phaseshift = (1 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - i3Lead);
+    i1phaseshift = (3 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i1Lead); // in degrees
+    i2phaseshift = (2 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i2Lead);
+    i3phaseshift = (1 * ADC_RATE * 3.6e-4 * SUPPLY_FREQUENCY - EEProm.i3Lead);
   #endif    
 
 }
@@ -905,10 +923,10 @@ void calculateTiming(void)
 
 void sendResults()
 {
-  #ifdef RFM69CW    
-    rfm_send((byte *)&emontx, sizeof(emontx), networkGroup, nodeID);      // *SEND RF DATA*
+  #ifdef RFM69CW                                 // *SEND RF DATA*
+    if (EEProm.rf_on)
+      rfm_send((byte *)&emontx, sizeof(emontx), EEProm.networkGroup, EEProm.nodeID, EEProm.RF_freq, EEProm.rfPower, busyThreshold, busyTimeout);
   #else
-
     #ifdef TXPIN
       digitalWrite(TXPIN,HIGH);
       delay(5);
@@ -917,7 +935,7 @@ void sendResults()
   #endif
 
   #if defined SERIALOUT && !defined EMONESP
-    Serial.print(nodeID);     Serial.print(' ');
+    Serial.print(EEProm.nodeID); Serial.print(F(" "));
     #if WIRES == 3-WIRE
     Serial.print((int)(realPower1+0.5) + (int)(realPower2+0.5));   // These for compatibility, but whatever you need if emonHub is configured to suit. 
     Serial.print(F(" 0.0 "));
@@ -952,10 +970,13 @@ void sendResults()
     Serial.print(F(",vrms:")); Serial.print(Vrms);
 
     
-    for(byte j=0;j<MAXONEWIRE;j++)
+    if (EEProm.temp_enable)
     {
-      Serial.print(F(",t")); Serial.print(j+1); Serial.print(F(":"));
-      Serial.print(emontx.temp[j]/100.0);
+      for(byte j=0;j<MAXONEWIRE;j++)
+      {
+        Serial.print(F(",t")); Serial.print(j+1); Serial.print(F(":"));
+        Serial.print(emontx.temp[j]/100.0);
+      }
     }
     Serial.print(F(",pulses:"));Serial.print(emontx.pulseCount);
     Serial.println();
@@ -1004,7 +1025,8 @@ void sendResults()
     Serial.print(F(" "));
     Serial.print(powerFactor4,4);
     Serial.print(F(" "));
-    Serial.print((float)emontx.temp[0]/100);
+    if (EEProm.temp_enable)
+      Serial.print((float)emontx.temp[0]/100);
 
     #ifdef USEPULSECOUNT
       Serial.print(F(" Pulses=")); Serial.print(emontx.pulseCount);
@@ -1016,6 +1038,21 @@ void sendResults()
     Serial.println();
   #endif
   
+  if (EEProm.showCurrents)
+  {
+    // to show voltage, current & power factor for calibration:
+    Serial.print(F("Vrms:")); Serial.print(emontx.Vrms*0.01); 
+    Serial.print(F(",I1:")); Serial.print(I1rms);
+    Serial.print(F(",I2:")); Serial.print(I2rms);
+    Serial.print(F(",I3:")); Serial.print(I3rms);
+    Serial.print(F(",I4:")); Serial.print(I4rms);
+
+    Serial.print(F(",pf1:")); Serial.print(powerFactor1,4);
+    Serial.print(F(",pf2:")); Serial.print(powerFactor2,4);
+    Serial.print(F(",pf3:")); Serial.print(powerFactor3,4);
+    Serial.print(F(",pf4:")); Serial.println(powerFactor4,4);
+  }
+
 }
 
 bool isTemperatureSensor(void)
@@ -1066,15 +1103,18 @@ int readTemperature()
 //-------------------------------------------------------------------------------------------------------------------------------------------
 void onPulse()                  
 {
-  if (PulseMinPeriod)
+  if (EEProm.pulse_enable)
   {
-    if ((millis() - pulseTime) > PulseMinPeriod) {              // Check that contact bounce has finished
-      pulses++;
+    if (EEProm.pulse_period)
+    {
+      if ((millis() - pulseTime) > EEProm.pulse_period) {  // Check that contact bounce has finished
+        pulses++;
+      }
+      pulseTime=millis();
     }
-    pulseTime=millis();                                         // No 'debounce' required - electronic switch presumed 	
-  }
-  else
-    pulses++;					
+    else                                                   // No 'debounce' required - electronic switch presumed 	
+      pulses++;
+  }    
 }
 
 #endif
